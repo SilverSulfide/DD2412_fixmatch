@@ -1,0 +1,40 @@
+
+
+# --- TRAINING PARAMETERS --- #
+train:
+  # experiment
+  num_train_iters: 1048576        #2**20
+  batch: 2
+  eval_batch: 1024
+  num_labels: 40
+  log_interval: 10000             #evaluation frequency
+  label_ratio: 7                  #uratio
+  hard_label: true
+  temperature: 0.5
+  label_threshold: 0.95
+  ema_m: 0.999
+  ulb_loss_ratio: 1.0
+
+
+  # optimizer
+  learning_rate: 0.03
+  momentum: 0.9
+  weight_decay: 0.0005
+  fp16: true
+
+
+# --- DATA PARAMETERS --- #
+data:
+  data_dir: ./data
+  dataset: cifar10
+  data_sampler: RandomSampler #train_sampler
+  num_classes: 10
+
+
+
+# --- MODEL PARAMETERS --- #
+model:
+  depth: 28
+  widen_factor: 2
+  leaky_slope: 0.1
+  dropout: 0.0

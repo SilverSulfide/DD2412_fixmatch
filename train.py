@@ -8,6 +8,8 @@ import torch
 import torch.backends.cudnn as cudnn
 from torch.utils.data import sampler, DataLoader
 from torch.utils.data.sampler import BatchSampler
+from torch.cuda.amp import autocast
+import torch.nn.functional as F
 
 from utils import TBLog, net_builder, get_logger, count_parameters
 from fixmatch import FixMatch
@@ -15,6 +17,34 @@ from ssl_dataset import SSL_Dataset
 from haparams import create_hparams
 
 from progressbar import ProgressBar
+
+
+def evaluate(model, eval_loader):
+    """
+
+    :param model: FixMatch instance
+    :param eval_loader: torch data loader instance
+    :return: tensorboard dictionary
+    """
+    eval_model = model.eval_model
+    eval_model.eval()
+
+    total_loss = 0.0
+    total_acc = 0.0
+    total_num = 0.0
+
+    for x, y in eval_loader:
+        x, y = x.cuda(), y.cuda()
+        num_batch = x.shape[0]
+        total_num += num_batch
+        logits = eval_model(x)
+        loss = F.cross_entropy(logits, y, reduction='mean')
+        acc = torch.sum(torch.max(logits, dim=-1)[1] == y)
+
+        total_loss += loss.detach() * num_batch
+        total_acc += acc.detach()
+
+    return {'eval/loss': total_loss / total_num, 'eval/top-1-acc': total_acc / total_num}
 
 
 def main(args, hps):
@@ -106,12 +136,12 @@ def main(args, hps):
     if args.resume:
         model.load_model(args.load_path)
 
-    # START TRAINING of FixMatch
+    # ---- START TRAINING of FixMatch ----
 
-    # start resnet training
+    # enable resnet training
     model.train_model.train()
 
-    # start_batch.record()
+    # store best values
     best_eval_acc, best_it = 0.0, 0
 
     # use progressbar in between model saves
@@ -134,7 +164,6 @@ def main(args, hps):
         x_lb, x_ulb_w, x_ulb_s = x_lb.cuda(), x_ulb_w.cuda(), x_ulb_s.cuda()
         y_lb = y_lb.long().cuda()  # FIXME: windows ghetto fix
         inputs = torch.cat((x_lb, x_ulb_w, x_ulb_s))
-        from torch.cuda.amp import autocast
 
         # inference, loss, update
         with autocast():
@@ -160,7 +189,8 @@ def main(args, hps):
         if model.it % hps.train.log_interval == 0:
             # stop the progress bar
             pbar.finish()
-            eval_dict = model.evaluate(loader_dict['eval'])
+            with torch.no_grad():
+                eval_dict = evaluate(model, loader_dict['eval'])
 
             tb_dict.update(eval_dict)
 
@@ -190,7 +220,8 @@ def main(args, hps):
         # free memory
         del tb_dict
 
-    eval_dict = model.evaluate()
+    with torch.no_grad():
+        eval_dict = evaluate(model, loader_dict['eval'])
     eval_dict.update({'eval/best_acc': best_eval_acc, 'eval/best_it': best_it})
     # eval_dict
 

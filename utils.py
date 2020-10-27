@@ -45,30 +45,6 @@ def init_lr_scheduler(optimizer, hps):
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=cosine_lr)
 
 
-class TBLog:
-    """
-    Construc tensorboard writer (self.writer).
-    The tensorboard is saved at os.path.join(tb_dir, file_name).
-    """
-
-    def __init__(self, tb_dir, file_name):
-        self.tb_dir = tb_dir
-        self.writer = SummaryWriter(os.path.join(self.tb_dir, file_name))
-
-    def update(self, tb_dict, it, suffix=None):
-        """
-        Args
-            tb_dict: contains scalar values for updating tensorboard
-            it: contains information of iteration (int).
-            suffix: If not None, the update key has the suffix.
-        """
-        if suffix is None:
-            suffix = ''
-
-        for key, value in tb_dict.items():
-            self.writer.add_scalar(suffix + key, value, it)
-
-
 def net_builder(net_params: dict):
     """
     Return ResNet building instance.
@@ -153,3 +129,27 @@ def sample_labeled_data(data, target,
         lb_data.extend(data[idx])
         lbs.extend(target[idx])
     return np.array(lb_data), np.array(lbs), np.array(lb_idx)
+
+
+class TBLog:
+    """
+    Construc tensorboard writer (self.writer).
+    The tensorboard is saved at os.path.join(tb_dir, file_name).
+    """
+
+    def __init__(self, tb_dir, file_name):
+        self.tb_dir = tb_dir
+        self.writer = SummaryWriter(os.path.join(self.tb_dir, file_name))
+
+    def update(self, tb_dict, it, suffix=None):
+        """
+        Args
+            tb_dict: contains scalar values for updating tensorboard
+            it: contains information of iteration (int).
+            suffix: If not None, the update key has the suffix.
+        """
+        if suffix is None:
+            suffix = ''
+
+        for key, value in tb_dict.items():
+            self.writer.add_scalar(suffix + key, value, it)

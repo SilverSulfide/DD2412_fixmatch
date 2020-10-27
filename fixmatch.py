@@ -82,7 +82,7 @@ class FixMatch:
         :param lb_targets: supervised targets
         :param ulb_w_logits: weakly-augmented unsupervised logits
         :param ulb_s_logits: strongly-augmented supervised logits
-        :return: total_loss: combined supervised and unsupervised loss
+        :return: tuple: supervised, unsupervised loss, combine loss
 
         Calculates both supervised and unsupervised loss
         """
@@ -123,29 +123,6 @@ class FixMatch:
         self.train_model.zero_grad()
 
     # taken from: https://github.com/LeeDoYup/FixMatch-pytorch
-    @torch.no_grad()
-    def evaluate(self, eval_loader):
-
-        eval_model = self.eval_model
-        eval_model.eval()
-
-        total_loss = 0.0
-        total_acc = 0.0
-        total_num = 0.0
-
-        for x, y in eval_loader:
-            x, y = x.cuda(), y.cuda()
-            num_batch = x.shape[0]
-            total_num += num_batch
-            logits = eval_model(x)
-            loss = F.cross_entropy(logits, y, reduction='mean')
-            acc = torch.sum(torch.max(logits, dim=-1)[1] == y)
-
-            total_loss += loss.detach() * num_batch
-            total_acc += acc.detach()
-
-        return {'eval/loss': total_loss / total_num, 'eval/top-1-acc': total_acc / total_num}
-
     @torch.no_grad()
     def _eval_model_update(self):
         """

@@ -1,6 +1,6 @@
 import torch
 
-from data_utils import split_ssl_data, get_onehot
+from utils import split_ssl_data
 from randaugment import RandAugment
 
 from PIL import Image
@@ -50,6 +50,7 @@ def construct_transforms(mean, std, args):
     transform_list['to_tensor'] = transforms.ToTensor()
     transform_list['normalize'] = transforms.Normalize(mean, std)
 
+    # noise addition happens to a tensor not an image, hence must be last
     if args.noise:
         transform_list['noise'] = AddGaussianNoise(std=0.03)
 
@@ -122,7 +123,7 @@ class SSL_Dataset:
     """
     SSL_Dataset class gets cifar10 from torchvision.datasets,
     separates labeled and unlabeled data,
-    and return BasicDataset: torch.utils.data.Dataset (see datasets.dataset.py)
+    and returns BasicDataset: torch.utils.data.Dataset
     """
 
     def __init__(self,
@@ -202,7 +203,6 @@ class SSL_Dataset:
         lb_data, lb_targets, ulb_data, ulb_targets = split_ssl_data(data, targets,
                                                                     num_labels, num_classes,
                                                                     index, include_lb_to_ulb)
-
         lb_dset = BasicDataset(lb_data, lb_targets, num_classes,
                                transform, False, None, onehot)
 
@@ -227,7 +227,6 @@ class BasicDataset(Dataset):
                  transform=None,
                  use_strong_transform=False,
                  strong_transform=None,
-                 onehot=False,
                  *args, **kwargs):
         """
         Args
@@ -237,7 +236,6 @@ class BasicDataset(Dataset):
             transform: basic transformation of data
             use_strong_transform: If True, this dataset returns both weakly and strongly augmented images.
             strong_transform: list of transformation functions for strong augmentation
-            onehot: If True, label is converted into onehot vector.
         """
         super(BasicDataset, self).__init__()
         self.data = data
@@ -245,7 +243,6 @@ class BasicDataset(Dataset):
 
         self.num_classes = num_classes
         self.use_strong_transform = use_strong_transform
-        self.onehot = onehot
 
         self.transform = transform
         if use_strong_transform:
@@ -268,8 +265,7 @@ class BasicDataset(Dataset):
             target = None
         else:
             target_ = self.targets[idx]
-            target = target_ if not self.onehot else get_onehot(self.num_classes, target_)
-
+            target = target_
         # set augmented images
 
         img = self.data[idx]

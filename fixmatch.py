@@ -1,68 +1,20 @@
 import torch
 import torch.nn.functional as F
-from torch.cuda.amp import autocast, GradScaler
-from progressbar import ProgressBar
-
+from torch.cuda.amp import GradScaler
 import os
-import contextlib
 
-from train_utils import ce_loss
-
-
-def consistency_loss(logits_w, logits_s, name='ce', T=1.0, p_cutoff=0.0, use_hard_labels=True):
-    assert name in ['ce', 'L2']
-    logits_w = logits_w.detach()
-    if name == 'L2':
-        assert logits_w.size() == logits_s.size()
-        return F.mse_loss(logits_s, logits_w, reduction='mean')
-
-    elif name == 'L2_mask':
-        pass
-
-    elif name == 'ce':
-        pseudo_label = torch.softmax(logits_w, dim=-1)
-        max_probs, max_idx = torch.max(pseudo_label, dim=-1)
-        mask = max_probs.ge(p_cutoff).float()
-
-        if use_hard_labels:
-            masked_loss = ce_loss(logits_s, max_idx, use_hard_labels, reduction='none') * mask
-        else:
-            pseudo_label = torch.softmax(logits_w / T, dim=-1)
-            masked_loss = ce_loss(logits_s, pseudo_label, use_hard_labels) * mask
-        return masked_loss.mean(), mask.mean()
-
-    else:
-        assert Exception('Not Implemented consistency_loss')
+from utils import init_optimiser, init_lr_scheduler
 
 
 class FixMatch:
     def __init__(self, net_builder, hps, tb_log=None, logger=None):
-        """
-        class Fixmatch contains setter of data_loader, optimizer, and model update methods.
-        Args:
-            net_builder: backbone network class (see net_builder in utils.py)
-            num_classes: # of label classes 
-            ema_m: momentum of exponential moving average for eval_model
-            T: Temperature scaling parameter for output sharpening (only when hard_label = False)
-            p_cutoff: confidence cutoff parameters for loss masking
-            lambda_u: ratio of unsupervised loss to supervised loss
-            hard_label: If True, consistency regularization use a hard pseudo label.
-            it: initial iteration count
-            num_eval_iter: freqeuncy of iteration (after 500,000 iters)
-            tb_log: tensorboard writer (see train_utils.py)
-            logger: logger (see utils.py)
-        """
-
         super(FixMatch, self).__init__()
 
         # momentum update param
-        self.loader = {}
         self.num_classes = hps.data.num_classes
         self.ema_m = hps.train.ema_m
 
         # create the encoders
-        # network is built only by num_classes,
-        # other configs are covered in main.py
 
         self.train_model = net_builder(num_classes=self.num_classes)
         self.eval_model = net_builder(num_classes=self.num_classes)
@@ -70,187 +22,117 @@ class FixMatch:
         self.lambda_u = hps.train.ulb_loss_ratio
         self.tb_log = tb_log
         self.use_hard_label = hps.train.hard_label
+        self.label_threshold = hps.train.label_threshold
 
-        self.optimizer = None
-        self.scheduler = None
+        # amount of labelled samples in a single forward call
+        self.lb = 0
+
+        # set optimiser, scheduler and scaler
+        self.optimizer = init_optimiser(self.train_model, hps)
+        self.scheduler = init_lr_scheduler(self.optimizer, hps)
+        self.scaler = GradScaler()
 
         self.it = 0
-        self.progress = 0  # for evaluation progress bar
 
         self.logger = logger
-        self.print_fn = print if logger is None else logger.info
+        self.print_fn = logger.info
 
+        # FIXME: get rid of this
         for param_q, param_k in zip(self.train_model.parameters(), self.eval_model.parameters()):
             param_k.data.copy_(param_q.detach().data)  # initialize the evaluation net
-            param_k.requires_grad = False  # not update by gradient for evaluation net
+            param_k.requires_grad = False  # do not update by gradient for evaluation net
 
         self.eval_model.eval()
 
+    def forward(self, inputs):
+        """
+
+        :param inputs: concatenated tensor of labelled and unlabelled images
+        :return: supervised/unsupervised logits
+        """
+        # perform inference on the whole input
+        logits = self.train_model(inputs)  # concat_batch_size x channels x width x height
+
+        # extract labelled logits for supervised loss
+        lb_logits = logits[:self.lb]
+
+        # extract unlabelled logits for unsupervised loss
+        ulb_w_logits, ulb_s_logits = logits[self.lb:].chunk(2)
+
+        # free memory
+        del logits
+
+        return lb_logits, ulb_w_logits, ulb_s_logits
+
+    def init_lb(self, x):
+        """
+        :param x: batch of labelled samples
+
+        Initatates the split value that used in forward call
+        """
+        self.lb = x.shape[0]
+
+    def update_iter(self):
+        self.it = self.it + 1
+
+    def loss(self, lb_logits, lb_targets, ulb_w_logits, ulb_s_logits):
+        """
+
+        :param lb_logits: supervised logits
+        :param lb_targets: supervised targets
+        :param ulb_w_logits: weakly-augmented unsupervised logits
+        :param ulb_s_logits: strongly-augmented supervised logits
+        :return: total_loss: combined supervised and unsupervised loss
+
+        Calculates both supervised and unsupervised loss
+        """
+
+        # calculate supervised cross entropy loss for the whole batch
+        sup_loss = F.cross_entropy(lb_logits, lb_targets, reduction='mean')
+
+        # calculate the unsupervised cross entropy loss
+
+        # get pseudo-label from weakly-supervised logits
+        pseudo_labels = F.softmax(ulb_w_logits, dim=1)  # batch x classes
+
+        # get max, compare to the cut-off value
+        pseudo_values, pseudo_labels = torch.max(pseudo_labels, dim=1)  # batch x classes
+        hard_labels = pseudo_values > self.label_threshold  # bool
+
+        # cross-entropy, ignoring the inputs that do not have a hard label
+        unsup_loss = F.cross_entropy(ulb_s_logits, pseudo_labels,
+                                     reduction='mean') * hard_labels.float()  # bool ->zeros
+
+        total_loss = sup_loss + self.lambda_u * unsup_loss.mean()
+
+        return sup_loss, unsup_loss.mean(), total_loss
+
+    def backward(self, loss):
+        """
+        Performs the backward pass using mixed precision.
+        https://pytorch.org/docs/stable/amp.html
+        """
+        # enable mixed precision training
+        self.scaler.scale(loss).backward()
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
+
+
+        # https://stackoverflow.com/questions/48001598/why-do-we-need-to-call-zero-grad-in-pytorch
+        self.scheduler.step()
+        self.train_model.zero_grad()
+
+    # taken from: https://github.com/LeeDoYup/FixMatch-pytorch
     @torch.no_grad()
-    def _eval_model_update(self):
-        """
-        Momentum update of evaluation model (exponential moving average)
-        """
-        for param_train, param_eval in zip(self.train_model.parameters(), self.eval_model.parameters()):
-            param_eval.copy_(param_eval * self.ema_m + param_train.detach() * (1 - self.ema_m))
+    def evaluate(self, eval_loader):
 
-        for buffer_train, buffer_eval in zip(self.train_model.buffers(), self.eval_model.buffers()):
-            buffer_eval.copy_(buffer_train)
-
-    def set_data_loader(self, loader_dict):
-        self.loader_dict = loader_dict
-        # FIXME: useless print statement
-        # self.print_fn(f'[!] data loader keys: {self.loader_dict.keys()}')
-
-    def set_optimizer(self, optimizer, scheduler=None):
-        self.optimizer = optimizer
-        self.scheduler = scheduler
-
-    def train(self, args, hps, logger=None):
-        """
-        Train function of FixMatch.
-        From data_loader, it infers training data, computes losses, and updates the networks.
-        """
-
-        # lb: labeled, ulb: unlabeled
-        self.train_model.train()
-
-        # for gpu profiling
-        start_batch = torch.cuda.Event(enable_timing=True)
-        end_batch = torch.cuda.Event(enable_timing=True)
-        start_run = torch.cuda.Event(enable_timing=True)
-        end_run = torch.cuda.Event(enable_timing=True)
-
-        start_batch.record()
-        best_eval_acc, best_it = 0.0, 0
-
-        scaler = GradScaler()
-        amp_cm = autocast if hps.train.fp16 else contextlib.nullcontext
-
-        # use progressbar in between model saves
-        pbar = ProgressBar(maxval=self.num_eval_iter)
-        pbar.start()
-
-        for (x_lb, y_lb), (x_ulb_w, x_ulb_s, _) in zip(self.loader_dict['train_lb'], self.loader_dict['train_ulb']):
-
-            # update the progressbar
-            pbar.update(self.progress)
-
-            # prevent the training iterations exceed args.num_train_iter
-            if self.it > hps.train.num_train_iters:
-                break
-
-            end_batch.record()
-            torch.cuda.synchronize()
-            start_run.record()
-
-            num_lb = x_lb.shape[0]
-            num_ulb = x_ulb_w.shape[0]
-            assert num_ulb == x_ulb_s.shape[0]
-
-            x_lb, x_ulb_w, x_ulb_s = x_lb.cuda(), x_ulb_w.cuda(), x_ulb_s.cuda()
-            y_lb = y_lb.long().cuda()  # FIXME: windows ghetto fix
-
-            inputs = torch.cat((x_lb, x_ulb_w, x_ulb_s))
-
-            # inference and calculate sup/unsup losses
-            with amp_cm():
-                logits = self.train_model(inputs)
-                logits_x_lb = logits[:num_lb]
-                logits_x_ulb_w, logits_x_ulb_s = logits[num_lb:].chunk(2)
-                del logits
-
-                # hyper-params for update
-                T = hps.train.temperature
-                p_cutoff = hps.train.label_threshold
-
-                sup_loss = ce_loss(logits_x_lb, y_lb, reduction='mean')
-                unsup_loss, mask = consistency_loss(logits_x_ulb_w,
-                                                    logits_x_ulb_s,
-                                                    'ce', T, p_cutoff,
-                                                    use_hard_labels=hps.train.hard_label)
-
-                total_loss = sup_loss + self.lambda_u * unsup_loss
-
-            # parameter updates
-            # if mixed precision, we need scaling
-            if hps.train.fp16:
-                scaler.scale(total_loss).backward()
-                scaler.step(self.optimizer)
-                scaler.update()
-            else:
-                total_loss.backward()
-                self.optimizer.step()
-
-            self.scheduler.step()
-            self.train_model.zero_grad()
-
-            with torch.no_grad():
-                self._eval_model_update()
-
-            end_run.record()
-            torch.cuda.synchronize()
-
-            # tensorboard_dict update
-            tb_dict = {}
-            tb_dict['train/sup_loss'] = sup_loss.detach()
-            tb_dict['train/unsup_loss'] = unsup_loss.detach()
-            tb_dict['train/total_loss'] = total_loss.detach()
-            tb_dict['train/mask_ratio'] = 1.0 - mask.detach()
-            tb_dict['lr'] = self.optimizer.param_groups[0]['lr']
-            tb_dict['train/prefecth_time'] = start_batch.elapsed_time(end_batch) / 1000.
-            tb_dict['train/run_time'] = start_run.elapsed_time(end_run) / 1000.
-
-            if self.it % self.num_eval_iter == 0:
-                # stop the progress bar
-                pbar.finish()
-                eval_dict = self.evaluate()
-                tb_dict.update(eval_dict)
-
-                save_path = os.path.join(args.save_dir, args.save_name)
-
-                if tb_dict['eval/top-1-acc'] > best_eval_acc:
-                    best_eval_acc = tb_dict['eval/top-1-acc']
-                    best_it = self.it
-
-                self.print_fn(
-                    f"{self.it} iteration, USE_EMA: {hasattr(self, 'eval_model')}, {tb_dict}, BEST_EVAL_ACC: {best_eval_acc}, at {best_it} iters")
-
-                # reset progressbar
-                self.progress = 0
-                pbar = ProgressBar(maxval=self.num_eval_iter)
-                pbar.start()
-
-            if self.it == best_it:
-                self.save_model('model_best.pth', save_path)
-
-            if not self.tb_log is None:
-                self.tb_log.update(tb_dict, self.it)
-
-            self.it += 1
-            self.progress += 1
-            del tb_dict
-            start_batch.record()
-            if self.it > 2 ** 19:
-                self.num_eval_iter = 1000
-
-        eval_dict = self.evaluate()
-        eval_dict.update({'eval/best_acc': best_eval_acc, 'eval/best_it': best_it})
-        return eval_dict
-
-    # do not generate computation graph when evaluating
-    @torch.no_grad()
-    def evaluate(self, eval_loader=None):
-        use_ema = hasattr(self, 'eval_model')
-
-        eval_model = self.eval_model if use_ema else self.train_model
+        eval_model = self.eval_model
         eval_model.eval()
-        if eval_loader is None:
-            eval_loader = self.loader_dict['eval']
 
         total_loss = 0.0
         total_acc = 0.0
         total_num = 0.0
+
         for x, y in eval_loader:
             x, y = x.cuda(), y.cuda()
             num_batch = x.shape[0]
@@ -262,10 +144,18 @@ class FixMatch:
             total_loss += loss.detach() * num_batch
             total_acc += acc.detach()
 
-        if not use_ema:
-            eval_model.train()
-
         return {'eval/loss': total_loss / total_num, 'eval/top-1-acc': total_acc / total_num}
+
+    @torch.no_grad()
+    def _eval_model_update(self):
+        """
+        Momentum update of evaluation model (exponential moving average)
+        """
+        for param_train, param_eval in zip(self.train_model.parameters(), self.eval_model.parameters()):
+            param_eval.copy_(param_eval * self.ema_m + param_train.detach() * (1 - self.ema_m))
+
+        for buffer_train, buffer_eval in zip(self.train_model.buffers(), self.eval_model.buffers()):
+            buffer_eval.copy_(buffer_train)
 
     def save_model(self, save_name, save_path):
         save_filename = os.path.join(save_path, save_name)

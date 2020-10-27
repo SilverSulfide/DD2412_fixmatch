@@ -7,10 +7,9 @@ train:
   batch: 2
   eval_batch: 1024
   num_labels: 40
-  log_interval: 10000             #evaluation frequency
+  log_interval: 100             #evaluation frequency
   label_ratio: 7                  #uratio
   hard_label: true
-  temperature: 0.5
   label_threshold: 0.95
   ema_m: 0.999
   ulb_loss_ratio: 1.0

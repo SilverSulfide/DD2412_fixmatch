@@ -4,4 +4,5 @@ tensorboard==2.3.0
 pillow
 pyyaml>=5.3
 progressbar2
+matplotlib
 numpy

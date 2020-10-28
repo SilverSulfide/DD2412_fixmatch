@@ -18,15 +18,20 @@ def main(args, hps):
     checkpoint = torch.load(checkpoint_path)
     load_model = checkpoint['train_model'] if args.use_train_model else checkpoint['eval_model']
 
-    resnet = net_builder({'depth': hps.model.depth,
+    resnet_builder = net_builder({'depth': hps.model.depth,
                           'widen_factor': hps.model.widen_factor,
                           'leaky_slope': hps.model.leaky_slope,
                           'dropRate': hps.model.dropout})
 
+    resnet = resnet_builder(num_classes=hps.data.num_classes)
     resnet.load_state_dict(load_model)
 
     if torch.cuda.is_available():
-        resnet.cuda()
+        device = torch.device('cuda')
+    else:
+        device = torch.device('cpu')
+
+    resnet.to(device)
     resnet.eval()
 
     eval_dset = SSL_Dataset(name=hps.data.dataset, train=False,
@@ -38,7 +43,7 @@ def main(args, hps):
     acc = 0.0
     with torch.no_grad():
         for image, target in eval_loader:
-            image = image.type(torch.FloatTensor).cuda()
+            image = image.type(torch.FloatTensor).to(device)
             logit = resnet(image)
 
             acc += logit.cpu().max(1)[1].eq(target).sum().numpy()
@@ -66,6 +71,6 @@ if __name__ == "__main__":
     parser.add_argument('-c', '--contrast', action='store_true', help='Add contrast transform to weak augment')
 
     args = parser.parse_args()
-    hps = create_hparams()
+    hps = create_hparams(args.hparams)
 
     main(args, hps)

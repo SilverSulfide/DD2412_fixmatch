@@ -4,13 +4,24 @@ import argparse
 
 import torch
 from torch.utils.data import DataLoader
+import torchvision
 
 from utils import net_builder
-from ssl_dataset import SSL_Dataset
+from ssl_dataset import SSL_Dataset, construct_transforms, get_transform
 from haparams import create_hparams
 
 
-def main(args, hps):
+def main(args, hps, use_transform=False):
+
+    # construct transforms
+    if use_transform:
+        # grab mean and std
+        mean = [x / 255 for x in [125.3, 123.0, 113.9]]
+        std = [x / 255 for x in [63.0, 62.1, 66.7]]
+
+        transform_list = construct_transforms(mean, std, args)
+        local_transform = get_transform(mean, std, transform_list, train=True)
+
     # overwrite batch size if needed
     batch_size = args.batch_size if args.batch_size else hps.train.eval_batch
 
@@ -19,9 +30,9 @@ def main(args, hps):
     load_model = checkpoint['train_model'] if args.use_train_model else checkpoint['eval_model']
 
     resnet_builder = net_builder({'depth': hps.model.depth,
-                          'widen_factor': hps.model.widen_factor,
-                          'leaky_slope': hps.model.leaky_slope,
-                          'dropRate': hps.model.dropout})
+                                  'widen_factor': hps.model.widen_factor,
+                                  'leaky_slope': hps.model.leaky_slope,
+                                  'dropRate': hps.model.dropout})
 
     resnet = resnet_builder(num_classes=hps.data.num_classes)
     resnet.load_state_dict(load_model)
@@ -42,9 +53,19 @@ def main(args, hps):
 
     acc = 0.0
     with torch.no_grad():
-        for image, target in eval_loader:
-            image = image.type(torch.FloatTensor).to(device)
-            logit = resnet(image)
+        for images, target in eval_loader:
+
+            images = images.type(torch.FloatTensor).to(device)
+            # loop over batch
+            if use_transform:
+                image = []
+                for i in range(images.shape[0]):
+                    aug_image = torchvision.transforms.functional.to_pil_image(images[i].cpu())
+                    aug_image = local_transform(aug_image)
+                    image.append(aug_image)
+                images = torch.stack(image, dim=0).type(torch.FloatTensor).to(device)
+
+            logit = resnet(images)
 
             acc += logit.cpu().max(1)[1].eq(target).sum().numpy()
 
@@ -73,4 +94,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
     hps = create_hparams(args.hparams)
 
-    main(args, hps)
+    if args.translate or args.noise or args.contrast:
+        use_transform = True
+    else:
+        use_transform = False
+
+    main(args, hps, use_transform=use_transform)

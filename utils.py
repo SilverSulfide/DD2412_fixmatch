@@ -38,6 +38,7 @@ def init_lr_scheduler(optimizer, hps):
     # grab maximum steps
     max_steps = hps.train.num_train_iters
 
+    # define lambda function for torch scheduler
     def cosine_lr(current_step):
         _lr = max(0.0, np.cos((7 * np.pi * current_step) / (16 * max_steps)))
         return _lr

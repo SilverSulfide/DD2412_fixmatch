@@ -172,6 +172,26 @@ class SSL_Dataset:
         return BasicDataset(data, targets, num_classes, transform,
                             use_strong_transform, strong_transform, onehot)
 
+    # For test time transformation
+    def get_dset_clean(self, use_strong_transform=False,
+                       strong_transform=None, onehot=False):
+        """
+        get_dset returns class BasicDataset, containing the returns of get_data.
+
+        Args
+            use_strong_tranform: If True, returned dataset generates a pair of weak and strong augmented images.
+            strong_transform: list of strong_transform (augmentation) if use_strong_transform is True
+            onehot: If True, the label is not integer, but one-hot vector.
+        """
+
+        data, targets = self.get_data()
+        num_classes = self.num_classes
+        transform = None
+        data_dir = self.data_dir
+
+        return BasicDataset(data, targets, num_classes, transform,
+                            use_strong_transform, strong_transform, onehot)
+
     def get_ssl_dset(self, num_labels, index=None, include_lb_to_ulb=True,
                      use_strong_transform=True, strong_transform=None,
                      onehot=False):

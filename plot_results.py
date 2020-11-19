@@ -15,10 +15,10 @@ def main(args):
     ax1.set_ylabel('Loss')
 
     if args.compact:
-        ax1.tick_params(axis='y', labelcolor='blue')
+        ax1.tick_params(axis='y', labelcolor='red')
 
         ax2 = ax1.twinx()
-        ax2.tick_params(axis='y', labelcolor='red')
+        ax2.tick_params(axis='y', labelcolor='blue')
 
     else:
         ax2.set_title('Evaluation accuracy')
@@ -59,8 +59,13 @@ def main(args):
                 # use regex to find iterations
                 iter = re.search('] (.+?) iteration', line)
 
-                if iter and int(iter.group(1)) <= 340000:
-                    iters.append(int(iter.group(1))/10000)
+                if iter:
+                    # reduce logging frequency for last 500k steps
+                    if int(iter.group(1))/10000 == int(int(iter.group(1))/10000):
+                        iters.append(int(iter.group(1))/10000)
+                    # append the very last log point
+                    elif int(iter.group(1))/10000 == 104.8:
+                        iters.append(int(iter.group(1)) / 10000)
 
                 # use regex to find acc
                 acc = re.search("top-1-acc': tensor(.+?),", line)
@@ -69,6 +74,7 @@ def main(args):
 
                 # use regex to find loss
                 loss = re.search("total_loss': tensor(.+?),", line)
+                #loss = re.search("sup_loss': tensor(.+?),", line)
                 if loss:
                     losses.append(float(loss.group(1)[1:]))
 

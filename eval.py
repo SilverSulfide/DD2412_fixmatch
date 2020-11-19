@@ -12,13 +12,13 @@ from haparams import create_hparams
 
 
 def main(args, hps, use_transform=False):
-
     # construct transforms
     if use_transform:
         # grab mean and std
         mean = [x / 255 for x in [125.3, 123.0, 113.9]]
         std = [x / 255 for x in [63.0, 62.1, 66.7]]
 
+        # horizontal flip + crop is on by default
         transform_list = construct_transforms(mean, std, args)
         local_transform = get_transform(mean, std, transform_list, train=True)
 
@@ -75,7 +75,8 @@ def main(args, hps, use_transform=False):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--load_path', type=str, default='./saved_models/fixmatch/model_best.pth')
+    parser.add_argument('--load_path', type=str,
+                        default='D:/KTH/Deep_learning_adv/Project/fully_trained/kth_project/saved_models_seed_2_tr/cifar10_40/model_best.pth')
 
     # use this to switch between train/eval models
     parser.add_argument('--use_train_model', action='store_true')

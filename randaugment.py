@@ -1,5 +1,7 @@
 # copyright: https://github.com/ildoonet/pytorch-randaugment
+# code in this file is adpated from rpmcruz/autoaugment
 # https://github.com/rpmcruz/autoaugment/blob/master/transformations.py
+# This code is modified version of one of ildoonet, for randaugmentation of fixmatch.
 
 import random
 
@@ -35,60 +37,45 @@ def Identity(img, v):
     return img
 
 
-def Posterize(img, v):  # [4, 8]
+def Posterize(img, v):
     v = int(v)
     v = max(1, v)
     return PIL.ImageOps.posterize(img, v)
 
 
-def Rotate(img, v):  # [-30, 30]
-    # assert -30 <= v <= 30
-    # if random.random() > 0.5:
-    #    v = -v
+def Rotate(img, v):
     return img.rotate(v)
 
 
-def Sharpness(img, v):  # [0.1,1.9]
+def Sharpness(img, v):
     assert v >= 0.0
     return PIL.ImageEnhance.Sharpness(img).enhance(v)
 
 
-def ShearX(img, v):  # [-0.3, 0.3]
-    # assert -0.3 <= v <= 0.3
-    # if random.random() > 0.5:
-    #    v = -v
+def ShearX(img, v):
     return img.transform(img.size, PIL.Image.AFFINE, (1, v, 0, 0, 1, 0))
 
 
-def ShearY(img, v):  # [-0.3, 0.3]
-    # assert -0.3 <= v <= 0.3
-    # if random.random() > 0.5:
-    #    v = -v
+def ShearY(img, v):
     return img.transform(img.size, PIL.Image.AFFINE, (1, 0, 0, v, 1, 0))
 
 
-def TranslateX(img, v):  # [-150, 150] => percentage: [-0.45, 0.45]
-    # assert -0.3 <= v <= 0.3
-    # if random.random() > 0.5:
-    #    v = -v
+def TranslateX(img, v):
     v = v * img.size[0]
     return img.transform(img.size, PIL.Image.AFFINE, (1, 0, v, 0, 1, 0))
 
 
-def TranslateY(img, v):  # [-150, 150] => percentage: [-0.45, 0.45]
-    # assert -0.3 <= v <= 0.3
-    # if random.random() > 0.5:
-    #    v = -v
+def TranslateY(img, v):
     v = v * img.size[1]
     return img.transform(img.size, PIL.Image.AFFINE, (1, 0, 0, 0, 1, v))
 
 
-def Solarize(img, v):  # [0, 256]
+def Solarize(img, v):
     assert 0 <= v <= 256
     return PIL.ImageOps.solarize(img, v)
 
 
-def Cutout(img, v):  # [0, 60] => percentage: [0, 0.2] => change to [0, 0.5]
+def Cutout(img, v):
     assert 0.0 <= v <= 0.5
     if v <= 0.:
         return img
@@ -97,8 +84,7 @@ def Cutout(img, v):  # [0, 60] => percentage: [0, 0.2] => change to [0, 0.5]
     return CutoutAbs(img, v)
 
 
-def CutoutAbs(img, v):  # [0, 60] => percentage: [0, 0.2]
-    # assert 0 <= v <= 20
+def CutoutAbs(img, v):
     if v < 0:
         return img
     w, h = img.size
@@ -112,7 +98,6 @@ def CutoutAbs(img, v):  # [0, 60] => percentage: [0, 0.2]
 
     xy = (x0, y0, x1, y1)
     color = (125, 123, 114)
-    # color = (0, 0, 0)
     img = img.copy()
     PIL.ImageDraw.Draw(img).rectangle(xy, color)
     return img
@@ -141,7 +126,7 @@ def augment_list():
 class RandAugment:
     def __init__(self, n, m):
         self.n = n
-        self.m = m  # [0, 30] in fixmatch, deprecated.
+        self.m = m
         self.augment_list = augment_list()
 
     def __call__(self, img):
@@ -150,5 +135,6 @@ class RandAugment:
             val = min_val + float(max_val - min_val) * random.random()
             img = op(img, val)
         cutout_val = random.random() * 0.5
-        img = Cutout(img, cutout_val)  # for fixmatch
+        # cutout for fixmatch
+        img = Cutout(img, cutout_val)
         return img
